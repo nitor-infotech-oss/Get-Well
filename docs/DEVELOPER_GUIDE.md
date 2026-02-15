@@ -14,9 +14,11 @@ This guide helps any developer clone, configure, and run the full application lo
 6. [Default Login & Dev Seed](#6-default-login--dev-seed)
 7. [API Documentation](#7-api-documentation)
 8. [Amazon Chime SDK Integration (Audio/Video)](#8-amazon-chime-sdk-integration-audiovideo)
-9. [Running Tests](#10-running-tests)
-10. [Optional: AWS Resources (Minimal)](#11-optional-aws-resources-minimal)
-11. [Troubleshooting](#12-troubleshooting)
+9. [Running Tests](#9-running-tests)
+10. [Optional: AWS Resources (Minimal)](#10-optional-aws-resources-minimal)
+11. [Deployment (AWS POC)](#11-deployment-aws-poc)
+12. [Key Libraries & Tools](#12-key-libraries--tools)
+13. [Troubleshooting](#13-troubleshooting)
 
 ---
 
@@ -99,10 +101,11 @@ GetWell/
 │   ├── .env.example
 │   └── package.json
 ├── infrastructure/
-│   └── terraform/              # AWS (minimal + govcloud)
-│       └── environments/
-│           └── minimal/        # S3, KMS, ECR, IAM for dev
-├── docker-compose.yml          # Postgres + Redis (+ optional backend)
+│   ├── aws-poc/                # Terraform: EC2, VPC, Security Group, IAM (POC deployment)
+│   └── terraform/              # AWS GovCloud (legacy)
+├── .github/workflows/deploy.yml  # CI/CD: test + deploy to EC2
+├── docker-compose.yml          # Local dev: Postgres + Redis (+ optional backend)
+├── docker-compose.prod.yml    # Production: full stack on EC2
 ├── docs/
 │   └── DEVELOPER_GUIDE.md      # This file
 ├── project_context.md          # Product/architecture context
@@ -152,6 +155,15 @@ Edit `backend/.env`. For **local development only**, you can keep defaults; only
 
 **Important for frontend login:** Set `CORS_ORIGIN` to include your frontend URL, e.g. `http://localhost:5173` (Vite default). Multiple origins: `http://localhost:5173,http://localhost:8080`.
 
+**For video calls (Amazon Chime):** Add AWS credentials. The backend uses the standard `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` environment variables. Create an IAM user with Chime SDK permissions (`chime:CreateMeeting`, `chime:DeleteMeeting`, `chime:CreateAttendee`, etc.) and add to `.env`:
+
+```
+AWS_ACCESS_KEY_ID=AKIA...
+AWS_SECRET_ACCESS_KEY=...
+```
+
+Or use `aws configure` and ensure the backend process can read those vars (e.g. from `~/.aws/credentials` via AWS SDK default chain, or export them before `npm run start:dev`).
+
 ### 4.3 Frontend environment
 
 ```bash
@@ -164,9 +176,9 @@ Edit `frontend/.env`:
 | Variable | Description | Local default |
 |----------|-------------|----------------|
 | `VITE_API_BASE_URL` | Backend API base URL | `http://localhost:3000/api` |
-| `VITE_WS_URL` | WebSocket server URL (for real-time updates) | `http://localhost:3001` |
+| `VITE_WS_URL` | Socket.IO server URL (for real-time call notifications) | `http://localhost:3000` |
 
-If your backend runs on a different host/port, change these accordingly.
+**Important:** Socket.IO is served by the backend on the **same port** as the API (3000), not a separate WebSocket port. For local development, set `VITE_WS_URL=http://localhost:3000`. For production (behind Nginx), leave it empty so the client uses the same origin (HTTPS) — the frontend will connect via `/socket.io/` relative path.
 
 ---
 
@@ -365,10 +377,11 @@ This composable encapsulates all Chime SDK logic:
 6. **Local video preview** appears in the bottom right (your camera feed).
 
 7. **Simulate patient joining** (for testing):
-   - Open a **second browser tab** (or Incognito window) at [http://localhost:5173](http://localhost:5173).
-   - Log in again (or register a second user).
-   - Initiate a call to the **same room** → Both tabs will join the same Chime meeting.
-   - You should see the **remote video** (other tab's camera) appear in the main video area.
+   - Open a **second browser tab** (or Incognito window) at [http://localhost:5173/patient/room-101](http://localhost:5173/patient/room-101).
+   - The patient page will show "Online — Waiting for calls". No login required on the patient side.
+   - From the **first tab** (Nurse Console), initiate a call to **room-101**.
+   - The **second tab** will show an "Incoming Video Call" dialog. Click **Accept**.
+   - Both tabs will join the same Chime meeting. You should see **video and hear audio** on both sides.
 
 8. **Test controls**:
    - Click **microphone** button → Should mute/unmute audio.
@@ -400,7 +413,7 @@ This composable encapsulates all Chime SDK logic:
 
 ---
 
-## 10. Running Tests
+## 9. Running Tests
 
 ### Backend (unit tests)
 
@@ -421,11 +434,11 @@ The project uses Vite + Vue 3. Add a test runner (e.g. Vitest) if needed; there 
 
 ---
 
-## 11. Optional: AWS Resources (Minimal)
+## 10. Optional: AWS Resources (Minimal)
 
 To use **Amazon Chime SDK** (e.g. create meetings, optional recording to S3), you need AWS credentials and optionally a minimal set of resources.
 
-### 11.1 AWS CLI (optional)
+### 10.1 AWS CLI (optional)
 
 ```bash
 # macOS (Homebrew)
@@ -443,7 +456,7 @@ Verify:
 aws sts get-caller-identity
 ```
 
-### 11.2 Minimal Terraform (S3, KMS, ECR)
+### 10.2 Minimal Terraform (S3, KMS, ECR)
 
 From the repo, a **minimal** Terraform config creates only:
 
@@ -469,7 +482,39 @@ Without these, the app still runs; only Chime recording (and possibly some Chime
 
 ---
 
-## 12. Troubleshooting
+## 11. Deployment (AWS POC)
+
+The project includes infrastructure and CI/CD for deploying to AWS:
+
+- **Terraform:** `infrastructure/aws-poc/` provisions EC2, VPC, Security Group, IAM, Elastic IP
+- **Docker Compose:** `docker-compose.prod.yml` runs Postgres, Redis, Backend, Frontend (Nginx) on a single EC2 instance
+- **GitHub Actions:** `.github/workflows/deploy.yml` runs tests and deploys via SSH on push to `main`
+
+For full deployment instructions — Terraform apply, GitHub Secrets, manual deploy — see **[docs/DEPLOYMENT.md](./DEPLOYMENT.md)**.
+
+---
+
+## 12. Key Libraries & Tools
+
+| Layer | Library | Purpose |
+|-------|---------|---------|
+| Backend | NestJS | API framework |
+| Backend | TypeORM + pg | PostgreSQL ORM |
+| Backend | ioredis | Redis client |
+| Backend | Socket.IO (NestJS) | WebSocket gateway |
+| Backend | @aws-sdk/client-chime-sdk-meetings | Chime meeting/attendee APIs |
+| Backend | bcrypt, passport-jwt | Auth |
+| Frontend | Vue 3, Vuetify, Pinia | UI framework |
+| Frontend | Vite | Build tool |
+| Frontend | amazon-chime-sdk-js | WebRTC video/audio |
+| Frontend | socket.io-client | Real-time signaling |
+| Frontend | buffer, process | Polyfills for Chime SDK in browser |
+| Infra | Docker, Nginx | Containers, static serve + reverse proxy |
+| Infra | Terraform | AWS provisioning |
+
+---
+
+## 13. Troubleshooting
 
 ### Login returns 401 “Invalid credentials”
 
@@ -502,8 +547,14 @@ Without these, the app still runs; only Chime recording (and possibly some Chime
 ### Frontend: “Cannot reach server” or blank after login
 
 - Confirm backend is up: [http://localhost:3000/api/health](http://localhost:3000/api/health).
-- Confirm `frontend/.env`: `VITE_API_BASE_URL=http://localhost:3000/api` (no trailing slash).
+- Confirm `frontend/.env`: `VITE_API_BASE_URL=http://localhost:3000/api` (no trailing slash), `VITE_WS_URL=http://localhost:3000`.
 - Restart the frontend dev server after changing `.env`.
+
+### Patient not receiving incoming call notification
+
+- Patient must have the patient page open (**before** the nurse initiates the call) at e.g. http://localhost:5173/patient/room-101.
+- Check `VITE_WS_URL` is set to `http://localhost:3000` (Socket.IO runs on the same port as the backend API).
+- Open browser DevTools → Console; you should see `[WS] Connected to backend` and `[Patient] Connected to backend, registering for room-101`.
 
 ### Node version warning (Vite)
 
