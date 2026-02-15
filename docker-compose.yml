@@ -1,0 +1,61 @@
+# ============================================================
+# GetWell RhythmX — Local Development Stack
+# ============================================================
+# Usage: docker-compose up -d
+# This starts PostgreSQL, Redis, and the Backend service.
+
+version: '3.8'
+
+services:
+  # ── PostgreSQL ──
+  postgres:
+    image: postgres:16-alpine
+    container_name: gw-postgres
+    environment:
+      POSTGRES_USER: getwell
+      POSTGRES_PASSWORD: getwell_dev
+      POSTGRES_DB: getwell_rhythmx
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U getwell']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis (session state for <2s latency) ──
+  redis:
+    image: redis:7-alpine
+    container_name: gw-redis
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Backend (NestJS) ──
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: gw-backend
+    ports:
+      - '3000:3000'
+      - '3001:3001'
+    env_file:
+      - ./backend/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      REDIS_HOST: redis
+
+volumes:
+  postgres_data:

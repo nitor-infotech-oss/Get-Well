@@ -1,0 +1,109 @@
+# ============================================================
+# GetWell RhythmX — Production Docker Compose
+# Runs on a single EC2 instance: Nginx + Backend + PostgreSQL + Redis
+# ============================================================
+
+version: '3.8'
+
+services:
+  # ── PostgreSQL ──
+  postgres:
+    image: postgres:16-alpine
+    container_name: gw-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USERNAME:-getwell}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-getwell_prod_2026}
+      POSTGRES_DB: ${DB_NAME:-getwell_rhythmx}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${DB_USERNAME:-getwell}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  # ── Redis ──
+  redis:
+    image: redis:7-alpine
+    container_name: gw-redis
+    restart: always
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  # ── Backend (NestJS) ──
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: gw-backend
+    restart: always
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      LOG_LEVEL: info
+      JWT_SECRET: ${JWT_SECRET:-rhythmx-prod-jwt-secret-change-me}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USERNAME: ${DB_USERNAME:-getwell}
+      DB_PASSWORD: ${DB_PASSWORD:-getwell_prod_2026}
+      DB_NAME: ${DB_NAME:-getwell_rhythmx}
+      DB_SSL: 'false'
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ''
+      REDIS_TLS: 'false'
+      CORS_ORIGIN: '*'
+      CHIME_REGION: us-east-1
+      CHIME_MEETING_REGION: us-east-1
+      CHIME_RECORDING_BUCKET: ${CHIME_RECORDING_BUCKET:-}
+      CHIME_KMS_KEY_ARN: ${CHIME_KMS_KEY_ARN:-}
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      GETWELL_STAY_BASE_URL: https://api.getwellnetwork.com
+      GETWELL_STAY_CLIENT_ID: ${GETWELL_STAY_CLIENT_ID:-placeholder}
+      GETWELL_STAY_CLIENT_SECRET: ${GETWELL_STAY_CLIENT_SECRET:-placeholder}
+      GETWELL_STAY_TOKEN_ENDPOINT: /oauth/token
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - internal
+
+  # ── Frontend (Nginx — serves SPA + reverse proxy to backend) ──
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: /api
+        VITE_WS_URL: ''
+    container_name: gw-frontend
+    restart: always
+    ports:
+      - '80:80'
+    depends_on:
+      - backend
+    networks:
+      - internal
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  internal:
+    driver: bridge

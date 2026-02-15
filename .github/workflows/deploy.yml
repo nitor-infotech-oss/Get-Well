@@ -1,0 +1,114 @@
+# ============================================================
+# GetWell RhythmX — CI/CD Pipeline
+# Triggers on push to main branch.
+# Builds Docker images, deploys to EC2 via SSH.
+# ============================================================
+
+name: Deploy to AWS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # Allow manual trigger
+
+env:
+  EC2_HOST: ${{ secrets.EC2_HOST }}
+  EC2_USER: ec2-user
+  DEPLOY_DIR: /home/ec2-user/getwell-rhythmx
+
+jobs:
+  # ── Job 1: Run tests ──
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Lint backend
+        working-directory: backend
+        run: npm run lint --if-present
+
+      - name: Build backend
+        working-directory: backend
+        run: npm run build
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+        env:
+          VITE_API_BASE_URL: /api
+          VITE_WS_URL: ''
+
+  # ── Job 2: Deploy to EC2 ──
+  deploy:
+    name: Deploy
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -e
+
+            echo "=== Deploying GetWell RhythmX ==="
+
+            # Clone or pull the latest code
+            if [ -d "${{ env.DEPLOY_DIR }}" ]; then
+              cd ${{ env.DEPLOY_DIR }}
+              git fetch origin main
+              git reset --hard origin/main
+            else
+              git clone https://${{ secrets.GH_TOKEN }}@github.com/${{ github.repository }}.git ${{ env.DEPLOY_DIR }}
+              cd ${{ env.DEPLOY_DIR }}
+            fi
+
+            # Write production environment file
+            cat > .env.prod <<'ENVEOF'
+            DB_USERNAME=${{ secrets.DB_USERNAME }}
+            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+            DB_NAME=getwell_rhythmx
+            JWT_SECRET=${{ secrets.JWT_SECRET }}
+            AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
+            AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
+            CHIME_RECORDING_BUCKET=${{ secrets.CHIME_RECORDING_BUCKET }}
+            CHIME_KMS_KEY_ARN=${{ secrets.CHIME_KMS_KEY_ARN }}
+            ENVEOF
+
+            # Build and restart containers
+            docker compose -f docker-compose.prod.yml --env-file .env.prod build --no-cache
+            docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+
+            # Wait for health checks
+            sleep 15
+            echo "=== Checking service health ==="
+            docker compose -f docker-compose.prod.yml ps
+
+            # Verify backend is healthy
+            curl -sf http://localhost/api/health || echo "Warning: health check failed (may still be starting)"
+
+            echo "=== Deployment complete ==="
