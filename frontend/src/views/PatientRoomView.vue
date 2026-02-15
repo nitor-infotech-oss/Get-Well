@@ -91,6 +91,7 @@
                   class="video-tile fill-height"
                   autoplay
                   playsinline
+                  muted
                 ></video>
                 <div class="video-label">Nurse</div>
               </div>
@@ -303,25 +304,29 @@ async function acceptCall(): Promise<void> {
     isInCall.value = true;
     callStartTime.value = Date.now();
 
-    // Build Chime SDK format
+    // Build Chime SDK format — use canonical { Meeting: { ... } } wrapper
     const meetingConfig = {
-      MeetingId: data.meetingId,
-      MediaPlacement: {
-        AudioHostUrl: data.mediaPlacement.audioHostUrl,
-        AudioFallbackUrl: data.mediaPlacement.audioFallbackUrl,
-        SignalingUrl: data.mediaPlacement.signalingUrl,
-        TurnControlUrl: data.mediaPlacement.turnControlUrl,
-        ScreenDataUrl: data.mediaPlacement.screenDataUrl,
-        ScreenSharingUrl: data.mediaPlacement.screenSharingUrl,
-        ScreenViewingUrl: data.mediaPlacement.screenViewingUrl,
-        EventIngestionUrl: data.mediaPlacement.eventIngestionUrl,
+      Meeting: {
+        MeetingId: data.meetingId,
+        MediaPlacement: {
+          AudioHostUrl: data.mediaPlacement.audioHostUrl,
+          AudioFallbackUrl: data.mediaPlacement.audioFallbackUrl,
+          SignalingUrl: data.mediaPlacement.signalingUrl,
+          TurnControlUrl: data.mediaPlacement.turnControlUrl,
+          ScreenDataUrl: data.mediaPlacement.screenDataUrl,
+          ScreenSharingUrl: data.mediaPlacement.screenSharingUrl,
+          ScreenViewingUrl: data.mediaPlacement.screenViewingUrl,
+          EventIngestionUrl: data.mediaPlacement.eventIngestionUrl,
+        },
       },
     };
 
     const attendeeConfig = {
-      AttendeeId: data.attendeeId,
-      ExternalUserId: `patient-${locationId.value}`,
-      JoinToken: data.joinToken,
+      Attendee: {
+        AttendeeId: data.attendeeId,
+        ExternalUserId: `patient-${locationId.value}`,
+        JoinToken: data.joinToken,
+      },
     };
 
     // Initialize Chime SDK and start audio/video
