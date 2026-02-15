@@ -3,8 +3,6 @@
 # Runs on a single EC2 instance: Nginx + Backend + PostgreSQL + Redis
 # ============================================================
 
-version: '3.8'
-
 services:
   # ── PostgreSQL ──
   postgres:
