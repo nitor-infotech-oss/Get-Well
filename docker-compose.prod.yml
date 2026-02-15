@@ -47,7 +47,10 @@ services:
     container_name: gw-backend
     restart: always
     environment:
-      NODE_ENV: production
+      # POC demo: use 'development' so TypeORM synchronize creates tables
+      # and the seed user is created automatically.
+      # For real production: use 'production' with migrations.
+      NODE_ENV: development
       PORT: 3000
       LOG_LEVEL: info
       JWT_SECRET: ${JWT_SECRET:-rhythmx-prod-jwt-secret-change-me}
@@ -93,6 +96,7 @@ services:
     restart: always
     ports:
       - '80:80'
+      - '443:443'
     depends_on:
       - backend
     networks:
