@@ -256,6 +256,17 @@ export function useChimeSession() {
         console.log('[Chime] Video input:', videoInputs[0].label);
       }
 
+      // Bind an <audio> element so the SDK can play received audio from
+      // remote participants. Without this, the mic captures fine but nothing
+      // is routed to the speakers. The element is created programmatically —
+      // it does not need to be visible in the DOM.
+      const audioElement = document.createElement('audio');
+      audioElement.autoplay = true;
+      // Must NOT be muted — this is the speaker output for remote audio
+      audioElement.muted = false;
+      av.bindAudioElement(audioElement);
+      console.log('[Chime] Audio output element bound');
+
       // Connect to the Chime meeting.
       // audioVideoDidStart fires when connected → calls startLocalVideoTile()
       av.start();
