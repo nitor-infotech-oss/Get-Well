@@ -6,6 +6,13 @@
       GetWell RhythmX Virtual Care
     </v-app-bar-title>
 
+    <v-btn variant="text" color="white" :to="{ name: 'dashboard' }">
+      Dashboard
+    </v-btn>
+    <v-btn variant="text" color="white" :to="{ name: 'recordings' }">
+      Recordings
+    </v-btn>
+
     <v-spacer />
 
     <v-chip v-if="auth.user" variant="outlined" color="white" class="mr-3">

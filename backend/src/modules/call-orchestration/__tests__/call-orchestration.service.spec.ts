@@ -1,11 +1,16 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, ServiceUnavailableException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import { getRepositoryToken } from '@nestjs/typeorm';
 import { CallOrchestrationService } from '../call-orchestration.service';
 import { ChimeService } from '../../chime/chime.service';
 import { GetwellStayService } from '../../getwell-stay/getwell-stay.service';
 import { DeviceGateway } from '../../websocket/device.gateway';
 import { REDIS_CLIENT } from '../../../config/redis.config';
 import { CallStatus } from '../../../common/enums';
+import { RecordingMetadata } from '../entities/recording-metadata.entity';
 
 describe('CallOrchestrationService', () => {
   let service: CallOrchestrationService;
@@ -13,6 +18,7 @@ describe('CallOrchestrationService', () => {
   let getwellStayService: jest.Mocked<GetwellStayService>;
   let deviceGateway: jest.Mocked<DeviceGateway>;
   let redisClient: Record<string, jest.Mock>;
+  let recordingMetadataRepo: { create: jest.Mock; save: jest.Mock };
 
   beforeEach(async () => {
     // Mock Redis
@@ -21,6 +27,11 @@ describe('CallOrchestrationService', () => {
       set: jest.fn(),
       setex: jest.fn(),
       del: jest.fn(),
+    };
+
+    recordingMetadataRepo = {
+      create: jest.fn((dto) => dto),
+      save: jest.fn().mockResolvedValue({}),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -34,7 +45,12 @@ describe('CallOrchestrationService', () => {
             startRecording: jest.fn(),
             stopRecording: jest.fn(),
             deleteMeeting: jest.fn(),
+            isRecordingEnabled: jest.fn().mockReturnValue(true),
           },
+        },
+        {
+          provide: getRepositoryToken(RecordingMetadata),
+          useValue: recordingMetadataRepo,
         },
         {
           provide: GetwellStayService,
@@ -47,8 +63,10 @@ describe('CallOrchestrationService', () => {
           provide: DeviceGateway,
           useValue: {
             isDeviceOnline: jest.fn(),
+            isPatientOnline: jest.fn().mockReturnValue(false),
             signalDeviceJoinMeeting: jest.fn(),
             signalDeviceLeaveMeeting: jest.fn(),
+            notifyPatientCallEnded: jest.fn(),
             emitCallStatusUpdate: jest.fn(),
           },
         },
@@ -74,6 +92,9 @@ describe('CallOrchestrationService', () => {
     };
 
     it('should reject call if device is offline', async () => {
+      const originalEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'production';
+
       deviceGateway.isDeviceOnline.mockResolvedValue(false);
 
       await expect(service.initiateCall(callDto)).rejects.toThrow(
@@ -82,6 +103,8 @@ describe('CallOrchestrationService', () => {
 
       expect(chimeService.createMeetingSession).not.toHaveBeenCalled();
       expect(getwellStayService.startCall).not.toHaveBeenCalled();
+
+      process.env.NODE_ENV = originalEnv;
     });
 
     it('should create Chime meeting and signal TV when device is online', async () => {
@@ -186,9 +209,8 @@ describe('CallOrchestrationService', () => {
 
     it('should signal device to join when patient accepts', async () => {
       redisClient.get
-        .mockResolvedValueOnce('sess-001')                // meetingMap lookup
-        .mockResolvedValueOnce(JSON.stringify(session))    // session lookup
-        ;
+        .mockResolvedValueOnce('sess-001') // meetingMap lookup
+        .mockResolvedValueOnce(JSON.stringify(session)); // session lookup
 
       chimeService.createAttendee.mockResolvedValue({
         attendeeId: 'device-att-001',
@@ -241,7 +263,10 @@ describe('CallOrchestrationService', () => {
       expect(chimeService.deleteMeeting).toHaveBeenCalledWith('mtg-123');
 
       // TV should be restored
-      expect(getwellStayService.endCall).toHaveBeenCalledWith('room-101', 'mtg-123');
+      expect(getwellStayService.endCall).toHaveBeenCalledWith(
+        'room-101',
+        'mtg-123',
+      );
 
       // Device should not be signaled to join
       expect(deviceGateway.signalDeviceJoinMeeting).not.toHaveBeenCalled();
@@ -277,10 +302,13 @@ describe('CallOrchestrationService', () => {
         sessionId: 'sess-001',
         meetingId: 'mtg-123',
         locationId: 'room-101',
+        callerId: 'nurse-001',
+        callerName: 'Nurse Joy',
         pipelineId: 'pipe-abc',
         status: CallStatus.CONNECTED,
         connectedAt: new Date().toISOString(),
         createdAt: new Date().toISOString(),
+        terminatedAt: new Date().toISOString(),
       };
 
       redisClient.get.mockResolvedValue(JSON.stringify(session));
@@ -308,10 +336,26 @@ describe('CallOrchestrationService', () => {
       );
 
       // TV should be restored
-      expect(getwellStayService.endCall).toHaveBeenCalledWith('room-101', 'mtg-123');
+      expect(getwellStayService.endCall).toHaveBeenCalledWith(
+        'room-101',
+        'mtg-123',
+      );
 
       // Redis mapping should be cleaned up
       expect(redisClient.del).toHaveBeenCalled();
+
+      // Recording metadata should be persisted when pipelineId exists
+      expect(recordingMetadataRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: 'sess-001',
+          meetingId: 'mtg-123',
+          pipelineId: 'pipe-abc',
+          locationId: 'room-101',
+          callerId: 'nurse-001',
+          s3Prefix: 'captures/pipe-abc',
+        }),
+      );
+      expect(recordingMetadataRepo.save).toHaveBeenCalled();
     });
   });
 });
