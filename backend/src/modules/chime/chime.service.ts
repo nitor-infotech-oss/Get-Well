@@ -11,6 +11,7 @@ import {
   CreateMediaCapturePipelineCommand,
   DeleteMediaCapturePipelineCommand,
 } from '@aws-sdk/client-chime-sdk-media-pipelines';
+import { STSClient, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import {
   generateClientRequestToken,
   generateMeetingExternalId,
@@ -28,12 +29,15 @@ import {
  * - Uses unique ClientRequestToken for every CreateMeeting / CreateMediaCapturePipeline
  * - Supports nearest media region selection
  * - Manages Media Capture Pipelines for Phase 1 recording requirement
+ * - HIPAA: S3 recordings encrypted at rest (SSE-KMS)
  */
 @Injectable()
 export class ChimeService implements OnModuleInit {
   private readonly logger = new Logger(ChimeService.name);
   private meetingsClient: ChimeSDKMeetingsClient;
   private pipelinesClient: ChimeSDKMediaPipelinesClient;
+  private stsClient: STSClient;
+  private awsAccountId: string | null = null;
 
   constructor(private readonly configService: ConfigService) {}
 
@@ -42,8 +46,51 @@ export class ChimeService implements OnModuleInit {
 
     this.meetingsClient = new ChimeSDKMeetingsClient({ region });
     this.pipelinesClient = new ChimeSDKMediaPipelinesClient({ region });
+    this.stsClient = new STSClient({ region });
 
     this.logger.log(`Chime SDK initialized in region: ${region}`);
+  }
+
+  /**
+   * Returns true if recording to S3 is configured (bucket + optional KMS).
+   * When false, startRecording will not be called — no impact on call flow.
+   */
+  isRecordingEnabled(): boolean {
+    const bucket = this.configService.get<string>('chime.recordingBucket');
+    return !!bucket && bucket.trim().length > 0;
+  }
+
+  /**
+   * Resolve AWS Account ID for Chime SourceArn. Uses CHIME_ACCOUNT_ID from config
+   * or fetches via STS GetCallerIdentity (cached).
+   */
+  private async getAwsAccountId(): Promise<string> {
+    if (this.awsAccountId) return this.awsAccountId;
+
+    const fromConfig = this.configService.get<string>('chime.accountId');
+    if (fromConfig?.trim()) {
+      this.awsAccountId = fromConfig.trim();
+      return this.awsAccountId;
+    }
+
+    try {
+      const response = await this.stsClient.send(
+        new GetCallerIdentityCommand({}),
+      );
+      this.awsAccountId = response.Account ?? '';
+      this.logger.debug({
+        message: 'Resolved AWS account ID via STS',
+        accountId: this.awsAccountId,
+      });
+      return this.awsAccountId;
+    } catch (err) {
+      this.logger.error({
+        message:
+          'Failed to get AWS account ID. Set CHIME_ACCOUNT_ID in env for recording.',
+        error: (err as Error).message,
+      });
+      throw err;
+    }
   }
 
   /**
@@ -132,27 +179,41 @@ export class ChimeService implements OnModuleInit {
   }
 
   /**
-   * Start a Media Capture Pipeline for recording.
-   * Per Chime SDK: ClientRequestToken is REQUIRED to prevent duplicate pipelines on retry.
-   * Recordings are stored in encrypted S3 (SSE-KMS).
+   * Start a Media Capture Pipeline for recording to S3.
+   * Per Chime SDK: ClientRequestToken for idempotency.
+   * SourceArn: arn:aws:chime:region:accountId:meeting/meetingId
+   * SinkArn: arn:aws:s3:::bucket-name (or with prefix)
+   * HIPAA: SSE-KMS encryption when KMS key is configured.
    */
   async startRecording(meetingId: string): Promise<string> {
-    const pipelineToken = generateClientRequestToken('pipe');
     const bucket = this.configService.get<string>('chime.recordingBucket');
-    const kmsKeyArn = this.configService.get<string>('chime.kmsKeyArn');
+    if (!bucket?.trim()) {
+      throw new Error('CHIME_RECORDING_BUCKET is not configured');
+    }
+
+    const region = this.configService.get<string>('chime.region');
+    const accountId = await this.getAwsAccountId();
+    const sourceArn = `arn:aws:chime:${region}:${accountId}:meeting/${meetingId}`;
+    const pipelineToken = generateClientRequestToken('pipe');
 
     this.logger.log({
       message: 'Starting media capture pipeline',
       meetingId,
       pipelineToken,
+      sinkBucket: bucket.split(':').pop(),
     });
+
+    const sinkArn = bucket.startsWith('arn:')
+      ? bucket
+      : `arn:aws:s3:::${bucket}`;
 
     const response = await this.pipelinesClient.send(
       new CreateMediaCapturePipelineCommand({
         SourceType: 'ChimeSdkMeeting',
-        SourceArn: `arn:aws:chime::${meetingId}`,
+        SourceArn: sourceArn,
         SinkType: 'S3Bucket',
-        SinkArn: bucket,
+        SinkArn: sinkArn,
+        ClientRequestToken: pipelineToken,
         ChimeSdkMeetingConfiguration: {
           ArtifactsConfiguration: {
             Audio: { MuxType: 'AudioWithActiveSpeakerVideo' },
@@ -188,7 +249,7 @@ export class ChimeService implements OnModuleInit {
   }
 
   /**
-   * Stop a media capture pipeline.
+   * Stop a media capture pipeline. Chime flushes final segments to S3 before pipeline ends.
    */
   async stopRecording(pipelineId: string): Promise<void> {
     this.logger.log({
