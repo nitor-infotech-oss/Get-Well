@@ -65,6 +65,38 @@ export const callApi = {
     api.post(`/calls/${sessionId}/end`),
 };
 
+// ── Recordings ──
+export const recordingsApi = {
+  list: (params?: {
+    locationId?: string;
+    fromDate?: string;
+    toDate?: string;
+    limit?: number;
+  }) => api.get<RecordingListItem[]>('/recordings', { params }),
+
+  getPlaybackUrls: (id: string) =>
+    api.get<PlaybackUrlResponse>(`/recordings/${id}/playback-url`),
+};
+
+export interface RecordingListItem {
+  id: string;
+  sessionId: string;
+  meetingId: string;
+  locationId: string;
+  callerId: string;
+  startedAt: string | null;
+  endedAt: string | null;
+  durationSeconds: number | null;
+}
+
+export interface PlaybackUrlResponse {
+  recordingId: string;
+  meetingId: string;
+  locationId: string;
+  segments: { url: string; order: number }[];
+  expiresInSeconds: number;
+}
+
 // ── Patient Call (no auth required) ──
 export const patientCallApi = {
   acceptCall: (data: { meetingId: string; locationId: string }) =>
