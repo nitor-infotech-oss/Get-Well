@@ -5,16 +5,10 @@ import {
   BadRequestException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
 import Redis from 'ioredis';
 import { randomUUID } from 'crypto';
 import { REDIS_CLIENT } from '../../config/redis.config';
-import {
-  REDIS_KEYS,
-  CALL_TIMEOUT_MS,
-  AUDIT_EVENTS,
-} from '../../common/constants/app.constants';
+import { REDIS_KEYS, CALL_TIMEOUT_MS, AUDIT_EVENTS } from '../../common/constants/app.constants';
 import { CallStatus, CallType } from '../../common/enums';
 import { ChimeService } from '../chime/chime.service';
 import { GetwellStayService } from '../getwell-stay/getwell-stay.service';
@@ -22,7 +16,6 @@ import { DeviceGateway } from '../websocket/device.gateway';
 import { CallSession } from './interfaces/call-session.interface';
 import { InitiateCallDto } from './dto/initiate-call.dto';
 import { PatientActionDto } from '../getwell-stay/dto/patient-action.dto';
-import { RecordingMetadata } from './entities/recording-metadata.entity';
 
 /**
  * Call Orchestration Service — the "brain" of the Digital Knock workflow.
@@ -41,8 +34,6 @@ export class CallOrchestrationService {
 
   constructor(
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-    @InjectRepository(RecordingMetadata)
-    private readonly recordingMetadataRepo: Repository<RecordingMetadata>,
     private readonly chimeService: ChimeService,
     private readonly getwellStayService: GetwellStayService,
     private readonly deviceGateway: DeviceGateway,
@@ -79,8 +70,7 @@ export class CallOrchestrationService {
         );
       }
       this.logger.warn({
-        message:
-          'Development: no device registered for location — call allowed for demo',
+        message: 'Development: no device registered for location — call allowed for demo',
         locationId,
       });
     }
@@ -112,21 +102,19 @@ export class CallOrchestrationService {
         mediaRegion,
       );
 
-      // ── Step 2: Start recording (Phase 1 requirement) — only when S3 bucket configured ──
+      // ── Step 2: Start recording (Phase 1 requirement) ──
       let pipelineId: string | undefined;
-      if (this.chimeService.isRecordingEnabled()) {
-        try {
-          pipelineId = await this.chimeService.startRecording(
-            meetingSession.meeting.meetingId,
-          );
-        } catch (err) {
-          // Recording failure is non-blocking — log and continue; call proceeds without recording
-          this.logger.error({
-            message: 'Failed to start recording pipeline (non-blocking)',
-            meetingId: meetingSession.meeting.meetingId,
-            error: (err as Error).message,
-          });
-        }
+      try {
+        pipelineId = await this.chimeService.startRecording(
+          meetingSession.meeting.meetingId,
+        );
+      } catch (err) {
+        // Recording failure is non-blocking — log and continue
+        this.logger.error({
+          message: 'Failed to start recording pipeline (non-blocking)',
+          meetingId: meetingSession.meeting.meetingId,
+          error: err.message,
+        });
       }
 
       // ── Build session object ──
@@ -376,10 +364,7 @@ export class CallOrchestrationService {
    * returns Chime credentials for the patient to join the meeting directly.
    * This is the demo POC flow replacing the TV webhook + camera device.
    */
-  async patientAcceptCall(
-    meetingId: string,
-    locationId: string,
-  ): Promise<{
+  async patientAcceptCall(meetingId: string, locationId: string): Promise<{
     meetingId: string;
     attendeeId: string;
     joinToken: string;
@@ -391,16 +376,12 @@ export class CallOrchestrationService {
       `${REDIS_KEYS.MEETING_MAP}${meetingId}`,
     );
     if (!sessionId) {
-      throw new BadRequestException(
-        `No active call found for meeting ${meetingId}`,
-      );
+      throw new BadRequestException(`No active call found for meeting ${meetingId}`);
     }
 
     const session = await this.getSession(sessionId);
     if (!session) {
-      throw new BadRequestException(
-        `Session not found for meeting ${meetingId}`,
-      );
+      throw new BadRequestException(`Session not found for meeting ${meetingId}`);
     }
 
     if (session.status !== CallStatus.RINGING) {
@@ -576,16 +557,7 @@ export class CallOrchestrationService {
         await this.chimeService.stopRecording(session.pipelineId).catch((err) =>
           this.logger.error({
             message: 'Failed to stop recording',
-            error: (err as Error).message,
-          }),
-        );
-
-        // Persist recording metadata for HIPAA audit and retrieval
-        await this.persistRecordingMetadata(session).catch((err) =>
-          this.logger.error({
-            message: 'Failed to persist recording metadata (non-blocking)',
-            sessionId: session.sessionId,
-            error: (err as Error).message,
+            error: err.message,
           }),
         );
       }
@@ -594,7 +566,7 @@ export class CallOrchestrationService {
       await this.chimeService.deleteMeeting(session.meetingId).catch((err) =>
         this.logger.error({
           message: 'Failed to delete meeting',
-          error: (err as Error).message,
+          error: err.message,
         }),
       );
 
@@ -634,34 +606,9 @@ export class CallOrchestrationService {
       this.logger.error({
         message: 'Error during call teardown',
         sessionId: session.sessionId,
-        error: (error as Error).message,
+        error: error.message,
       });
     }
-  }
-
-  /**
-   * Persist recording metadata for HIPAA audit. Chime writes to S3 under captures/{pipelineId}/.
-   */
-  private async persistRecordingMetadata(session: CallSession): Promise<void> {
-    if (!session.pipelineId) return;
-
-    const meta = this.recordingMetadataRepo.create({
-      sessionId: session.sessionId,
-      meetingId: session.meetingId,
-      pipelineId: session.pipelineId,
-      locationId: session.locationId,
-      callerId: session.callerId,
-      startedAt: session.createdAt ? new Date(session.createdAt) : null,
-      endedAt: session.terminatedAt ? new Date(session.terminatedAt) : null,
-      s3Prefix: `captures/${session.pipelineId}`,
-    });
-    await this.recordingMetadataRepo.save(meta);
-
-    this.logger.log({
-      message: 'Recording metadata persisted',
-      sessionId: session.sessionId,
-      pipelineId: session.pipelineId,
-    });
   }
 
   // ── Redis Session Helpers ──
@@ -676,12 +623,14 @@ export class CallOrchestrationService {
   }
 
   async getSession(sessionId: string): Promise<CallSession | null> {
-    const data = await this.redis.get(`${REDIS_KEYS.CALL_SESSION}${sessionId}`);
+    const data = await this.redis.get(
+      `${REDIS_KEYS.CALL_SESSION}${sessionId}`,
+    );
     return data ? JSON.parse(data) : null;
   }
 
   private async getActiveSessionByLocation(
-    _locationId: string,
+    locationId: string,
   ): Promise<CallSession | null> {
     // Scan for active sessions at this location
     // In production, maintain a location → sessionId index in Redis
