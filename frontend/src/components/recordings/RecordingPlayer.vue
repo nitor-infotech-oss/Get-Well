@@ -133,8 +133,10 @@ function swapVideosAndPlay(nextIndex: number) {
     nowActive.play().catch(() => {});
   }
   const nextNext = nextIndex + 1;
-  if (nextNext < props.segments.length) {
-    loadIntoVideo(getInactiveEl(), props.segments[nextNext].url, nextNext);
+  const inactiveEl = getInactiveEl();
+  const nextSeg = props.segments[nextNext];
+  if (nextNext < props.segments.length && inactiveEl && nextSeg?.url) {
+    loadIntoVideo(inactiveEl, nextSeg.url, nextNext);
   }
 }
 
@@ -202,8 +204,9 @@ function handleProgressClick(ev: MouseEvent) {
         isPlaying.value = true;
       }
     });
-    if (segIdx + 1 < props.segments.length) {
-      loadIntoVideo(activeEl, props.segments[segIdx + 1].url, segIdx + 1);
+    const nextSeg = props.segments[segIdx + 1];
+    if (segIdx + 1 < props.segments.length && nextSeg?.url) {
+      loadIntoVideo(activeEl, nextSeg.url, segIdx + 1);
     }
   } else {
     activeEl.currentTime = offset;
@@ -242,8 +245,9 @@ function initPlayer() {
   const seg0 = props.segments[0];
   if (seg0?.url && videoARef.value) {
     loadIntoVideo(videoARef.value, seg0.url, 0);
-    if (props.segments.length > 1) {
-      loadIntoVideo(videoBRef.value, props.segments[1].url, 1);
+    const seg1 = props.segments[1];
+    if (props.segments.length > 1 && videoBRef.value && seg1?.url) {
+      loadIntoVideo(videoBRef.value, seg1.url, 1);
     }
     // Prefetch remaining segments to warm cache for seamless playback
     for (let i = 2; i < props.segments.length; i++) {
