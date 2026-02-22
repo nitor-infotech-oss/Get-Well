@@ -1,69 +1,291 @@
 <template>
   <div class="recording-player">
-    <div ref="videoContainerRef" class="video-container" />
+    <div class="videos-wrapper" @click="onVideoAreaClick">
+      <video
+        ref="videoARef"
+        class="segment-video"
+        :class="{ active: activeVideo === 'A' }"
+        playsinline
+        preload="auto"
+        @ended="onSegmentEnded"
+        @loadedmetadata="onLoadedMetadata"
+      />
+      <video
+        ref="videoBRef"
+        class="segment-video"
+        :class="{ active: activeVideo === 'B' }"
+        playsinline
+        preload="auto"
+        @ended="onSegmentEnded"
+        @loadedmetadata="onLoadedMetadata"
+      />
+      <div
+        v-show="!hasStartedPlayback"
+        class="play-overlay"
+        aria-label="Play"
+        @click.stop="startPlayback"
+      >
+        <span class="play-icon">▶</span>
+      </div>
+    </div>
+    <div class="custom-controls">
+      <button
+        type="button"
+        class="control-btn"
+        :aria-label="isPlaying ? 'Pause' : 'Play'"
+        @click="togglePlay"
+      >
+        <span v-if="!isPlaying">▶</span>
+        <span v-else>⏸</span>
+      </button>
+      <div
+        class="progress-track"
+        role="slider"
+        :aria-valuenow="currentTime"
+        :aria-valuemin="0"
+        :aria-valuemax="totalDuration"
+        @click="handleProgressClick"
+      >
+        <div class="progress-fill" :style="{ width: progressPercent + '%' }" />
+      </div>
+      <span class="time-display">{{ formatTime(currentTime) }} / {{ formatTime(totalDuration) }}</span>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, watch } from 'vue';
-import videojs from 'video.js';
-import 'video.js/dist/video-js.css';
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 
 const props = defineProps<{
   segments: { url: string; order: number }[];
 }>();
 
-const videoContainerRef = ref<HTMLDivElement | null>(null);
-let player: ReturnType<typeof videojs> | null = null;
+const videoARef = ref<HTMLVideoElement | null>(null);
+const videoBRef = ref<HTMLVideoElement | null>(null);
+const activeVideo = ref<'A' | 'B'>('A');
+const currentIndex = ref(0);
+const isPlaying = ref(false);
+const hasStartedPlayback = ref(false);
+const segmentDurations = ref<number[]>([]);
+const timeUpdateInterval = ref<ReturnType<typeof setInterval> | null>(null);
+const segmentIndexByElement = new WeakMap<HTMLVideoElement, number>();
 
-function initPlayer() {
-  if (!videoContainerRef.value || props.segments.length === 0) return;
+const currentTime = ref(0);
+const totalDuration = computed(() => {
+  const sum = segmentDurations.value.reduce((a, b) => a + b, 0);
+  return sum > 0 ? sum : (props.segments.length * 6); // Fallback: ~6s per segment
+});
+const progressPercent = computed(() => {
+  const total = totalDuration.value;
+  return total > 0 ? Math.min(100, (currentTime.value / total) * 100) : 0;
+});
 
-  const videoEl = document.createElement('video-js');
-  videoEl.classList.add('vjs-big-play-centered', 'vjs-fluid');
-  videoContainerRef.value.appendChild(videoEl);
+function getActiveEl(): HTMLVideoElement | null {
+  return activeVideo.value === 'A' ? videoARef.value : videoBRef.value;
+}
+function getInactiveEl(): HTMLVideoElement | null {
+  return activeVideo.value === 'A' ? videoBRef.value : videoARef.value;
+}
 
-  player = videojs(videoEl, {
-    controls: true,
-    autoplay: false,
-    preload: 'auto',
-    fluid: true,
-    responsive: true,
-    playbackRates: [0.5, 1, 1.25, 1.5],
-  });
+function loadIntoVideo(
+  el: HTMLVideoElement | null,
+  url: string,
+  index: number,
+  seekTo?: number,
+  onReady?: () => void,
+) {
+  if (!el) return;
+  segmentIndexByElement.set(el, index);
+  const handler = () => {
+    if (seekTo != null && seekTo > 0) {
+      el.currentTime = seekTo;
+    }
+    el.removeEventListener('loadeddata', handler);
+    onReady?.();
+  };
+  el.addEventListener('loadeddata', handler);
+  el.src = url;
+  el.load();
+}
 
-  let currentIndex = 0;
-  const p = player;
+function onLoadedMetadata(ev: Event) {
+  const v = ev.target as HTMLVideoElement;
+  const idx = segmentIndexByElement.get(v);
+  if (v.duration && !isNaN(v.duration) && idx != null && idx >= 0 && idx < props.segments.length) {
+    segmentDurations.value[idx] = v.duration;
+  }
+}
 
-  function loadSegment(index: number) {
-    if (!p || p.isDisposed() || index >= props.segments.length) return;
-    const seg = props.segments[index];
-    if (!seg || !seg.url) return;
+function swapVideosAndPlay(nextIndex: number) {
+  if (nextIndex >= props.segments.length) {
+    isPlaying.value = false;
+    return;
+  }
+  const inactive = getInactiveEl();
+  const seg = props.segments[nextIndex];
+  if (!inactive || !seg?.url) return;
 
-    p.src({ type: 'video/mp4', src: seg.url });
-    currentIndex = index;
+  currentIndex.value = nextIndex;
+  activeVideo.value = activeVideo.value === 'A' ? 'B' : 'A';
+  const nowActive = getActiveEl();
+  if (nowActive) {
+    nowActive.currentTime = 0;
+    nowActive.play().catch(() => {});
+  }
+  const nextNext = nextIndex + 1;
+  if (nextNext < props.segments.length) {
+    loadIntoVideo(getInactiveEl(), props.segments[nextNext].url, nextNext);
+  }
+}
+
+function onSegmentEnded() {
+  swapVideosAndPlay(currentIndex.value + 1);
+}
+
+function startPlayback() {
+  hasStartedPlayback.value = true;
+  const el = getActiveEl();
+  if (el) {
+    el.play().catch(() => {});
+    isPlaying.value = true;
+  }
+}
+
+function onVideoAreaClick() {
+  if (!hasStartedPlayback.value) return;
+  togglePlay();
+}
+
+function togglePlay() {
+  const el = getActiveEl();
+  if (!el) return;
+  if (isPlaying.value) {
+    el.pause();
+  } else {
+    el.play().catch(() => {});
+  }
+  isPlaying.value = !isPlaying.value;
+}
+
+function handleProgressClick(ev: MouseEvent) {
+  const track = ev.currentTarget as HTMLElement;
+  const rect = track.getBoundingClientRect();
+  const percent = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+  const targetTime = percent * totalDuration.value;
+
+  let acc = 0;
+  let segIdx = 0;
+  let offset = 0;
+  for (let i = 0; i < props.segments.length; i++) {
+    const d = segmentDurations.value[i] ?? 6;
+    if (acc + d >= targetTime) {
+      segIdx = i;
+      offset = targetTime - acc;
+      break;
+    }
+    acc += d;
   }
 
-  p.one('loadedmetadata', () => {
-    if (!p.isDisposed()) p.play()?.catch(() => {});
-  });
+  const seg = props.segments[segIdx];
+  const activeEl = getActiveEl();
+  if (!activeEl || !seg?.url) return;
 
-  p.on('ended', () => {
-    if (!p.isDisposed() && currentIndex + 1 < props.segments.length) {
-      loadSegment(currentIndex + 1);
+  if (segIdx !== currentIndex.value) {
+    const inactiveEl = getInactiveEl();
+    if (!inactiveEl) return;
+    currentIndex.value = segIdx;
+    loadIntoVideo(inactiveEl, seg.url, segIdx, offset, () => {
+      activeVideo.value = activeVideo.value === 'A' ? 'B' : 'A';
+      const nowActive = getActiveEl();
+      if (nowActive) {
+        nowActive.play().catch(() => {});
+        isPlaying.value = true;
+      }
+    });
+    if (segIdx + 1 < props.segments.length) {
+      loadIntoVideo(activeEl, props.segments[segIdx + 1].url, segIdx + 1);
     }
-  });
+  } else {
+    activeEl.currentTime = offset;
+    if (!isPlaying.value) {
+      activeEl.play().catch(() => {});
+      isPlaying.value = true;
+    }
+  }
+  currentTime.value = targetTime;
+}
 
-  loadSegment(0);
+function updateCurrentTime() {
+  const el = getActiveEl();
+  if (!el) return;
+  let acc = 0;
+  for (let i = 0; i < currentIndex.value; i++) {
+    acc += segmentDurations.value[i] ?? 6;
+  }
+  currentTime.value = acc + el.currentTime;
+}
+
+function formatTime(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function initPlayer() {
+  if (props.segments.length === 0) return;
+  segmentDurations.value = new Array(props.segments.length).fill(0);
+  currentIndex.value = 0;
+  activeVideo.value = 'A';
+  currentTime.value = 0;
+  hasStartedPlayback.value = false;
+
+  const seg0 = props.segments[0];
+  if (seg0?.url && videoARef.value) {
+    loadIntoVideo(videoARef.value, seg0.url, 0);
+    if (props.segments.length > 1) {
+      loadIntoVideo(videoBRef.value, props.segments[1].url, 1);
+    }
+    // Prefetch remaining segments to warm cache for seamless playback
+    for (let i = 2; i < props.segments.length; i++) {
+      const u = props.segments[i]?.url;
+      if (u) fetch(u, { mode: 'cors' }).catch(() => {});
+    }
+  }
+
+  const el = videoARef.value;
+  if (el) {
+    el.addEventListener('play', () => { isPlaying.value = true; });
+    el.addEventListener('pause', () => { isPlaying.value = false; });
+    el.addEventListener('timeupdate', updateCurrentTime);
+  }
+  if (videoBRef.value) {
+    videoBRef.value.addEventListener('play', () => { isPlaying.value = true; });
+    videoBRef.value.addEventListener('pause', () => { isPlaying.value = false; });
+    videoBRef.value.addEventListener('timeupdate', updateCurrentTime);
+  }
+
+  timeUpdateInterval.value = setInterval(updateCurrentTime, 250);
 }
 
 function disposePlayer() {
-  if (player && !player.isDisposed()) {
-    player.dispose();
-    player = null;
+  if (timeUpdateInterval.value) {
+    clearInterval(timeUpdateInterval.value);
+    timeUpdateInterval.value = null;
   }
-  if (videoContainerRef.value) {
-    videoContainerRef.value.innerHTML = '';
+  const a = videoARef.value;
+  const b = videoBRef.value;
+  if (a) {
+    a.pause();
+    a.removeAttribute('src');
+    a.load();
+    a.removeEventListener('play', () => {});
+    a.removeEventListener('pause', () => {});
+    a.removeEventListener('timeupdate', updateCurrentTime);
+  }
+  if (b) {
+    b.pause();
+    b.removeAttribute('src');
+    b.load();
   }
 }
 
@@ -89,23 +311,94 @@ watch(
 .recording-player {
   width: 100%;
   background: #000;
+  color: #fff;
 }
 
-.video-container {
+.videos-wrapper {
   position: relative;
   width: 100%;
+  min-height: 320px;
   aspect-ratio: 16 / 9;
+  cursor: pointer;
 }
 
-.video-container :deep(.vjs-fluid) {
-  padding-top: 0;
+.play-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+  cursor: pointer;
 }
 
-.video-container :deep(.video-js) {
+.play-icon {
+  font-size: 72px;
+  color: rgba(255, 255, 255, 0.9);
+  opacity: 0.9;
+}
+
+.play-overlay:hover .play-icon {
+  opacity: 1;
+}
+
+.segment-video {
   position: absolute;
   top: 0;
   left: 0;
   width: 100%;
   height: 100%;
+  object-fit: contain;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.05s ease-out;
+}
+
+.segment-video.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.custom-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: #1a1a1a;
+}
+
+.control-btn {
+  background: transparent;
+  border: none;
+  color: #fff;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
+.control-btn:hover {
+  color: #4fc3f7;
+}
+
+.progress-track {
+  flex: 1;
+  height: 6px;
+  background: #444;
+  border-radius: 3px;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: #4fc3f7;
+  border-radius: 3px;
+  transition: width 0.1s linear;
+}
+
+.time-display {
+  font-size: 13px;
+  color: #aaa;
+  min-width: 90px;
 }
 </style>
