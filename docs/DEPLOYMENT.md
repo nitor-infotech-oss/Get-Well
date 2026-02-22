@@ -38,7 +38,7 @@ Internet            │  │  │ Nginx│ │NestJS│ │ PG  │ │Redis │
                     └─────────────────────────────────────────┘
 ```
 
-- **Nginx:** Serves Vue SPA, reverse-proxies `/api/` and `/socket.io/` to the backend. HTTPS (self-signed cert) + HTTP→HTTPS redirect.
+- **Nginx:** Serves Vue SPA, reverse-proxies `/api/` and `/socket.io/` to the backend. HTTPS + HTTP→HTTPS redirect. (Client deployment: Let's Encrypt trusted cert; personal account: self-signed.)
 - **Backend:** NestJS, connects to Postgres and Redis in the same Docker network.
 - **Database:** PostgreSQL 16 (Docker volume).
 - **Cache:** Redis 7 (Docker volume).
@@ -131,6 +131,7 @@ git clone https://github.com/YOUR_ORG/getwell-rhythmx.git
 cd getwell-rhythmx
 
 # Create .env.prod with production values
+# For recordings: set CHIME_RECORDING_BUCKET, CHIME_ACCOUNT_ID, AWS keys (same as local .env)
 cat > .env.prod << 'EOF'
 DB_USERNAME=getwell
 DB_PASSWORD=<secure-password>
@@ -138,7 +139,8 @@ DB_NAME=getwell_rhythmx
 JWT_SECRET=<secure-jwt-secret>
 AWS_ACCESS_KEY_ID=<your-aws-key>
 AWS_SECRET_ACCESS_KEY=<your-aws-secret>
-CHIME_RECORDING_BUCKET=
+CHIME_ACCOUNT_ID=<your-aws-account-id>
+CHIME_RECORDING_BUCKET=arn:aws:s3:::getwell-rhythmx-recordings-<account-id>
 CHIME_KMS_KEY_ARN=
 EOF
 ```
@@ -159,7 +161,7 @@ curl -k https://localhost/api/health
 
 ### 4.4 HTTPS Note
 
-The frontend container uses a **self-signed SSL certificate**. Browsers will show "Not Secure" — click **Advanced** → **Proceed** for the POC. For production with a domain, use Let's Encrypt or a proper certificate.
+The frontend container's Dockerfile generates a self-signed SSL certificate at build time. For the **client deployment** (ap-south-1), this has been replaced with a **Let's Encrypt** trusted certificate (domain: `3.108.191.34.sslip.io`) via Docker volume mount — browsers show a green lock with no warnings. The personal account deployment still uses the self-signed cert. For production with a custom domain, use AWS Certificate Manager + Route 53.
 
 ---
 
@@ -181,9 +183,8 @@ The workflow `.github/workflows/deploy.yml`:
 2. SSH to `EC2_HOST` as `ec2-user`
 3. Clone or `git pull` into `/home/ec2-user/getwell-rhythmx`
 4. Write `.env.prod` from GitHub Secrets
-5. `docker compose -f docker-compose.prod.yml --env-file .env.prod build --no-cache`
-6. `docker compose -f docker-compose.prod.yml --env-file .env.prod up -d`
-7. Health check: `curl http://localhost/api/health`
+5. Build and restart containers: uses `docker-compose.prod.yml`; when `ssl/` exists (Let's Encrypt setup), also uses `docker-compose.ssl.yml` so trusted HTTPS is preserved
+6. Health check: `curl http://localhost/api/health`
 
 ---
 
@@ -199,10 +200,26 @@ Configure these in **GitHub → Repository → Settings → Secrets and variable
 | `DB_USERNAME` | PostgreSQL username | `getwell` |
 | `DB_PASSWORD` | PostgreSQL password | `<secure-password>` |
 | `JWT_SECRET` | JWT signing secret | `<secure-random-string>` |
-| `AWS_ACCESS_KEY_ID` | AWS access key (Chime SDK) | `AKIA...` |
+| `AWS_ACCESS_KEY_ID` | AWS access key (Chime + S3 recordings) | `AKIA...` |
 | `AWS_SECRET_ACCESS_KEY` | AWS secret key | `...` |
-| `CHIME_RECORDING_BUCKET` | (Optional) S3 bucket ARN for recordings | `arn:aws:s3:::bucket-name` |
+| `CHIME_ACCOUNT_ID` | AWS account ID for Chime (e.g. `231733667519`) | Required for recordings |
+| `CHIME_RECORDING_BUCKET` | S3 bucket ARN for meeting recordings | `arn:aws:s3:::bucket-name` |
 | `CHIME_KMS_KEY_ARN` | (Optional) KMS key for S3 encryption | `arn:aws:kms:...` |
+| `CHIME_REGION` | (Optional) Chime region — defaults to `ap-south-1` | `ap-south-1` |
+| `SSL_HOST` | (Optional) Hostname for self-signed cert when ssl/ not used | `3.108.191.34.sslip.io` |
+
+### 6.1 Enable Recordings on Production
+
+For the **Meeting Recordings** page to work (same as localhost), you **must** set these 4 secrets:
+
+| Secret | Value (use same as your local `backend/.env`) |
+|--------|------------------------------------------------|
+| `AWS_ACCESS_KEY_ID` | Your AWS access key |
+| `AWS_SECRET_ACCESS_KEY` | Your AWS secret key |
+| `CHIME_ACCOUNT_ID` | Your AWS account ID (e.g. `231733667519`) |
+| `CHIME_RECORDING_BUCKET` | S3 bucket ARN (e.g. `arn:aws:s3:::getwell-rhythmx-recordings-231733667519`) |
+
+If any of these are missing or empty, the UI will show "Recording is disabled" and "No data available". After adding/updating these secrets, **re-run the deploy workflow** (push to `main` or manual trigger from Actions tab).
 
 ### Creating EC2_SSH_KEY
 
@@ -254,6 +271,26 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod logs
 - Verify `EC2_SSH_KEY` is the **entire** PEM file including `-----BEGIN` and `-----END`
 - Verify `EC2_HOST` is the EC2 public IP (not a hostname)
 - Ensure EC2 Security Group allows SSH (22) from GitHub Actions IPs (or 0.0.0.0/0 for POC)
+
+### Recordings show "Recording is disabled" / "No data available"
+
+The backend on EC2 gets recording config from `.env.prod`, which is built from **GitHub Secrets** during deploy. Ensure these 4 secrets are set (use the same values as your local `backend/.env`):
+
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `CHIME_ACCOUNT_ID`
+- `CHIME_RECORDING_BUCKET`
+
+Then **re-deploy** (push to `main` or run the workflow manually). The deploy overwrites `.env.prod` from secrets.
+
+**Quick fix (already-deployed server):** SSH to EC2, edit `.env.prod` in the deploy dir, add or update the 4 vars above (copy from your local `backend/.env`), then run:
+
+```bash
+cd /home/ec2-user/getwell-rhythmx
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+```
+
+Restarting applies the new env to the backend. (Note: a future deploy will overwrite `.env.prod` from GitHub Secrets, so add those secrets too for persistent fix.)
 
 ### Re-deploy after code changes
 
