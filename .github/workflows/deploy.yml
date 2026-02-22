@@ -66,6 +66,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify deployment secrets
+        run: |
+          if [ -z "${{ secrets.EC2_HOST }}" ]; then
+            echo "::error::EC2_HOST secret is not set. Configure in repo Settings → Secrets → Actions"
+            echo "Required: EC2_HOST, EC2_SSH_KEY, GH_TOKEN, DB_USERNAME, DB_PASSWORD, JWT_SECRET, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, CHIME_ACCOUNT_ID, CHIME_RECORDING_BUCKET"
+            exit 1
+          fi
+          echo "Secrets configured, proceeding with deploy..."
+
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
