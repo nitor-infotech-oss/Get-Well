@@ -51,7 +51,9 @@ export class RecordingsService {
       'us-east-1';
     this.s3Client = new S3Client({ region });
 
-    const bucketConfig = this.configService.get<string>('chime.recordingBucket');
+    const bucketConfig = this.configService.get<string>(
+      'chime.recordingBucket',
+    );
     if (!bucketConfig?.trim()) {
       this.bucket = '';
       return;
@@ -97,12 +99,15 @@ export class RecordingsService {
     resolvedPrefix: string | null;
     bucket: string;
   }> {
-    const rec = await this.recordingRepo.findOne({ where: { id: recordingId } });
+    const rec = await this.recordingRepo.findOne({
+      where: { id: recordingId },
+    });
     if (!rec) {
       throw new NotFoundException('Recording not found');
     }
-    let prefix: string | null =
-      rec.pipelineId ? `${rec.pipelineId}/` : (rec.s3Prefix?.trim() || null);
+    let prefix: string | null = rec.pipelineId
+      ? `${rec.pipelineId}/`
+      : rec.s3Prefix?.trim() || null;
     if (prefix && prefix.startsWith('captures/')) {
       prefix = prefix.replace(/^captures\//, '').replace(/\/?$/, '') + '/';
     }
@@ -171,9 +176,7 @@ export class RecordingsService {
       endedAt: r.endedAt?.toISOString() ?? null,
       durationSeconds:
         r.startedAt && r.endedAt
-          ? Math.round(
-              (r.endedAt.getTime() - r.startedAt.getTime()) / 1000,
-            )
+          ? Math.round((r.endedAt.getTime() - r.startedAt.getTime()) / 1000)
           : null,
     }));
   }
@@ -184,7 +187,9 @@ export class RecordingsService {
    * Try pipelineId first, then meetingId for backward compatibility with old rows.
    */
   async getPlaybackUrls(recordingId: string): Promise<PlaybackUrlResponse> {
-    const rec = await this.recordingRepo.findOne({ where: { id: recordingId } });
+    const rec = await this.recordingRepo.findOne({
+      where: { id: recordingId },
+    });
     if (!rec) {
       throw new NotFoundException('Recording not found');
     }
@@ -233,7 +238,9 @@ export class RecordingsService {
         contents = listRes.Contents ?? [];
         if (contents.length > 0) {
           resolvedPrefix = prefix;
-          this.logger.log(`S3 list found ${contents.length} objects at prefix ${prefix}`);
+          this.logger.log(
+            `S3 list found ${contents.length} objects at prefix ${prefix}`,
+          );
           break;
         }
       } catch (err) {
@@ -248,8 +255,6 @@ export class RecordingsService {
         'No recording artifacts found in storage (may still be processing). Chime can take 1–2 minutes after call end to finish uploading.',
       );
     }
-
-    const prefix = resolvedPrefix;
 
     // Sort by Key (Chime typically uses timestamp in key) for chronological order
     const sorted = [...contents].sort((a, b) =>
