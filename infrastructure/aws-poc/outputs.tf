@@ -8,13 +8,13 @@ output "app_public_ip" {
 }
 
 output "app_url" {
-  description = "Application URL"
-  value       = "http://${aws_eip.app.public_ip}"
+  description = "Application URL (HTTPS)"
+  value       = "https://${aws_eip.app.public_ip}"
 }
 
 output "patient_url" {
   description = "Patient room URL (example)"
-  value       = "http://${aws_eip.app.public_ip}/patient/room-101"
+  value       = "https://${aws_eip.app.public_ip}/patient/room-101"
 }
 
 output "ssh_command" {

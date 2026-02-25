@@ -1,7 +1,23 @@
 import { io, Socket } from 'socket.io-client';
 import type { CallStatusUpdate } from '../types';
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'http://localhost:3000';
+/**
+ * Resolve the Socket.IO server URL.
+ *
+ * - Development: VITE_WS_URL is set to 'http://localhost:3000' → connect there.
+ * - Production (behind nginx proxy): VITE_WS_URL is undefined/empty → use
+ *   a relative path so Socket.IO connects to the SAME origin as the page.
+ *   This ensures wss:// is used when the page is served over HTTPS.
+ */
+function getSocketTarget(): string {
+  const envUrl = import.meta.env.VITE_WS_URL;
+  // If explicitly set to a non-empty URL, use it (development)
+  if (envUrl && envUrl.length > 0) {
+    return `${envUrl}/devices`;
+  }
+  // Production: relative namespace → same origin, nginx proxies /socket.io/ to backend
+  return '/devices';
+}
 
 let socket: Socket | null = null;
 
@@ -12,8 +28,11 @@ let socket: Socket | null = null;
 export function connectSocket(): Socket {
   if (socket?.connected) return socket;
 
-  socket = io(`${WS_URL}/devices`, {
-    transports: ['websocket'],
+  const target = getSocketTarget();
+  console.log('[WS] Connecting to:', target);
+
+  socket = io(target, {
+    transports: ['websocket', 'polling'],
     autoConnect: true,
   });
 

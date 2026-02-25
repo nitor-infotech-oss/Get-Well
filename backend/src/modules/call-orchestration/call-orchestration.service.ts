@@ -16,6 +16,7 @@ import { DeviceGateway } from '../websocket/device.gateway';
 import { CallSession } from './interfaces/call-session.interface';
 import { InitiateCallDto } from './dto/initiate-call.dto';
 import { PatientActionDto } from '../getwell-stay/dto/patient-action.dto';
+import { LambdaClient, InvokeCommand } from "@aws-sdk/client-lambda";
 
 /**
  * Call Orchestration Service — the "brain" of the Digital Knock workflow.
@@ -31,6 +32,9 @@ import { PatientActionDto } from '../getwell-stay/dto/patient-action.dto';
 @Injectable()
 export class CallOrchestrationService {
   private readonly logger = new Logger(CallOrchestrationService.name);
+  private readonly lambdaClient = new LambdaClient({
+  region: process.env.AWS_REGION || 'ap-southeast-1',
+  });
 
   constructor(
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
@@ -599,6 +603,9 @@ export class CallOrchestrationService {
         session.meetingId,
       );
 
+      //recording metadata lambda//
+      void this.invokeRecordingMetadataLambda(session);
+
       // Clean up Redis
       await this.redis.del(`${REDIS_KEYS.MEETING_MAP}${session.meetingId}`);
       await this.redis.del(`meeting:placement:${session.meetingId}`);
@@ -610,7 +617,46 @@ export class CallOrchestrationService {
       });
     }
   }
+  //-lambda recording metadata //
+  private async invokeRecordingMetadataLambda(
+    session: CallSession,
+  ): Promise<void> {
+    try {
+      const payload = {
+        sessionId: session.sessionId,
+        meetingId: session.meetingId,
+        pipelineId: session.pipelineId,
+        locationId: session.locationId,
+        callerId: session.callerId,
+        startedAt: session.createdAt,
+        endedAt: session.terminatedAt || new Date().toISOString(),
+        s3Prefix: session.pipelineId ? `${session.pipelineId}/` : undefined,
+      };
 
+      await this.lambdaClient.send(
+        new InvokeCommand({
+          FunctionName:
+            process.env.RECORDING_METADATA_LAMBDA ||
+            'getwell-rhythmx-recording-metadata',
+          InvocationType: 'Event',
+          Payload: Buffer.from(JSON.stringify(payload)),
+        }),
+      );
+
+      this.logger.log({
+        message: 'Recording metadata Lambda invoked',
+        sessionId: session.sessionId,
+      });
+    } catch (error: any) {
+      this.logger.error({
+        message: 'Failed to invoke recording metadata Lambda',
+        sessionId: session.sessionId,
+        error: error?.message,
+      });
+    }
+  }
+
+  //recording metadata end//
   // ── Redis Session Helpers ──
 
   private async saveSession(session: CallSession): Promise<void> {

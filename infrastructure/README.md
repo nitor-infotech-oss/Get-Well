@@ -1,43 +1,25 @@
-# Infrastructure — AWS Deployment Guide
+# Infrastructure
 
-## Prerequisites
+AWS deployment resources for GetWell RhythmX.
 
-1. AWS CLI configured with GovCloud credentials:
-   ```bash
-   aws configure --profile govcloud
-   # Region: us-gov-west-1
-   ```
+## Directories
 
-2. Terraform >= 1.5 installed
+| Directory | Purpose |
+|-----------|---------|
+| **aws-poc/** | Terraform for POC: EC2, VPC, Security Group, IAM, Elastic IP. Single-instance deployment. |
+| **terraform/** | AWS GovCloud (legacy). |
 
-3. Create the Terraform state bucket (one-time):
-   ```bash
-   aws s3 mb s3://getwell-rhythmx-terraform-state --region us-gov-west-1
-   aws dynamodb create-table \
-     --table-name getwell-rhythmx-terraform-locks \
-     --attribute-definitions AttributeName=LockID,AttributeType=S \
-     --key-schema AttributeName=LockID,KeyType=HASH \
-     --billing-mode PAY_PER_REQUEST \
-     --region us-gov-west-1
-   ```
+## POC Deployment (aws-poc)
 
-## Deploy
+Use this for the current demo/POC deployment:
 
 ```bash
-cd infrastructure/terraform
-
-# For local dev (us-east-1), comment out the backend block in main.tf
+cd aws-poc
 terraform init
-terraform plan -var="db_password=YOUR_SECURE_PASSWORD" -var-file="environments/govcloud/terraform.tfvars"
-terraform apply -var="db_password=YOUR_SECURE_PASSWORD" -var-file="environments/govcloud/terraform.tfvars"
+terraform plan -out=tfplan
+terraform apply tfplan
 ```
 
-## Outputs
+Outputs: `app_public_ip`, `app_url`, `patient_url`, `ssh_command`, `ssh_private_key_path`.
 
-After apply, Terraform outputs the key values you need for `.env`:
-- `rds_endpoint` → `DB_HOST`
-- `redis_endpoint` → `REDIS_HOST`
-- `recording_bucket` → `CHIME_RECORDING_BUCKET`
-- `recording_kms_key_arn` → `CHIME_KMS_KEY_ARN`
-- `ecr_repository_url` → for Docker push
-- `backend_alb_dns` → API base URL
+See [docs/DEPLOYMENT.md](../docs/DEPLOYMENT.md) for full deployment instructions and CI/CD setup.

@@ -28,17 +28,31 @@ Based on *GW RhythmX Proposal* and *Contractor Job Descriptions*:
 ## 3. The "Digital Knock" Workflow (Core Logic)
 *Source: Virtual Care Phase 1 PRD & GW-Video-Integration-REST-API*
 
-The system must follow this strict event sequence:
+### POC Flow (Nurse ↔ Patient Browser)
 
-1.  **Nurse Initiates Call:** Nurse clicks "Call" in the EMR-embedded web app.
-2.  **Meeting Creation:** Backend calls AWS Chime SDK to create a meeting and attendee.
-3.  **TV Signal (The Knock):** Backend POSTs to **GetWell Stay API** (`/start_call`) with `meetingId` and `locationId`.
-4.  **Patient Prompt:** The TV interrupts current programming to show "Incoming Call from [Nurse Name]."
+The POC implements a **browser-to-browser** flow where both nurse and patient use web clients:
+
+1.  **Nurse Initiates Call:** Nurse clicks "Call" in the web console (e.g. room-101).
+2.  **Meeting Creation:** Backend calls AWS Chime SDK to create a meeting and nurse attendee.
+3.  **Patient Notification:** Backend emits WebSocket `incoming_call` to patient(s) registered for that room (via Socket.IO).
+4.  **Patient Prompt:** Patient browser (at `/patient/room-101`) shows "Incoming Video Call" dialog.
 5.  **Patient Action:**
-    *   **IF ACCEPTED:** TV sends webhook to Backend (`action: "ACCEPTED"`). Backend immediately signals Camera Device via WebSocket to wake up and join the Chime meeting.
-    *   **IF DECLINED:** TV sends webhook (`action: "DECLINED"`). Backend tears down Chime meeting and notifies Nurse.
-    *   **IF EMERGENCY (Override):** Nurse selects "Emergency." Backend sends `callType: "override"` to TV. TV auto-answers; Camera joins immediately without patient input.
-6.  **Termination:** Call ends. Backend POSTs to GetWell Stay API (`/end_call`) to restore TV state (HDMI switch back).
+    *   **IF ACCEPTED:** Patient browser calls `POST /api/calls/patient-accept`. Backend creates patient attendee, returns Chime credentials. Patient joins Chime meeting directly (WebRTC video/audio).
+    *   **IF DECLINED:** Patient browser calls `POST /api/calls/patient-decline`. Backend tears down Chime meeting and notifies Nurse.
+6.  **Termination:** Call ends (nurse or patient). Backend tears down Chime meeting, notifies both sides via WebSocket.
+
+### Production Flow (TV + Camera Device)
+
+The system also supports the full hardware flow:
+
+1.  **Nurse Initiates Call** → Backend creates Chime meeting.
+2.  **TV Signal (The Knock):** Backend POSTs to **GetWell Stay API** (`/start_call`) with `meetingId` and `locationId`.
+3.  **Patient Prompt:** TV shows "Incoming Call from [Nurse Name]."
+4.  **Patient Action:**
+    *   **IF ACCEPTED:** TV webhook → Backend signals Camera Device via WebSocket → Camera joins Chime meeting.
+    *   **IF DECLINED:** TV webhook → Backend tears down meeting.
+    *   **IF EMERGENCY (Override):** Camera auto-joins without patient input.
+6.  **Termination:** Backend POSTs to GetWell Stay API (`/end_call`) to restore TV state.
 
 ---
 
