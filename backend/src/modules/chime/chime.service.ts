@@ -150,7 +150,7 @@ export class ChimeService implements OnModuleInit {
     const response = await this.pipelinesClient.send(
       new CreateMediaCapturePipelineCommand({
         SourceType: 'ChimeSdkMeeting',
-        SourceArn: `arn:aws:chime::${meetingId}`,
+        SourceArn: `arn:aws:chime::231733667519:meeting:${meetingId}`,
         SinkType: 'S3Bucket',
         SinkArn: bucket,
         ChimeSdkMeetingConfiguration: {
