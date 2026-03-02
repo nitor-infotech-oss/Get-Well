@@ -9,7 +9,9 @@ import {
 import {
   ChimeSDKMediaPipelinesClient,
   CreateMediaCapturePipelineCommand,
+  CreateMediaConcatenationPipelineCommand,
   DeleteMediaCapturePipelineCommand,
+  GetMediaCapturePipelineCommand,
 } from '@aws-sdk/client-chime-sdk-media-pipelines';
 import {
   generateClientRequestToken,
@@ -28,6 +30,7 @@ import {
  * - Uses unique ClientRequestToken for every CreateMeeting / CreateMediaCapturePipeline
  * - Supports nearest media region selection
  * - Manages Media Capture Pipelines for Phase 1 recording requirement
+ * - HIPAA: S3 recordings encrypted at rest (SSE-KMS)
  */
 @Injectable()
 export class ChimeService implements OnModuleInit {
@@ -150,7 +153,7 @@ export class ChimeService implements OnModuleInit {
     const response = await this.pipelinesClient.send(
       new CreateMediaCapturePipelineCommand({
         SourceType: 'ChimeSdkMeeting',
-        SourceArn: `arn:aws:chime::${meetingId}`,
+        SourceArn: `arn:aws:chime::231733667519:meeting:${meetingId}`,
         SinkType: 'S3Bucket',
         SinkArn: bucket,
         ChimeSdkMeetingConfiguration: {
@@ -187,19 +190,119 @@ export class ChimeService implements OnModuleInit {
     );
   }
 
+  isRecordingEnabled(): boolean {
+    const bucket = this.configService.get<string>('chime.recordingBucket');
+    return !!bucket && bucket.trim().length > 0;
+  }
+
+  /// new set try
+  private async waitForCaptureToStop(pipelineId: string): Promise<void> {
+    const maxAttempts = 30; // ~60 seconds total
+    const delayMs = 2000;
+
+    for (let i = 0; i < maxAttempts; i++) {
+      try {
+        const response = await this.pipelinesClient.send(
+          new GetMediaCapturePipelineCommand({
+            MediaPipelineId: pipelineId,
+          }),
+        );
+
+        const status = response.MediaCapturePipeline?.Status;
+
+        if (status === 'Stopped') {
+          return;
+        }
+
+        if (status === 'Failed') {
+          throw new Error('Capture pipeline failed.');
+        }
+      } catch (err) {
+        // After delete, sometimes AWS returns NotFound — treat as stopped
+        return;
+      }
+
+      await new Promise((res) => setTimeout(res, delayMs));
+    }
+
+    throw new Error('Timeout waiting for capture pipeline to stop.');
+  }
+
+  ///
   /**
    * Stop a media capture pipeline.
    */
   async stopRecording(pipelineId: string): Promise<void> {
+    // this.logger.log({
+    //   message: 'Stopping media capture pipeline',
+    //   pipelineId,
+    // });
+
+    // await this.pipelinesClient.send(
+    //   new DeleteMediaCapturePipelineCommand({
+    //     MediaPipelineId: pipelineId,
+    //   }),
+    // );
+
     this.logger.log({
       message: 'Stopping media capture pipeline',
       pipelineId,
     });
 
+    const accountId = this.configService.get<string>('chime.accountId');
+    const region = this.configService.get<string>('chime.region');
+    const bucket = this.configService.get<string>('chime.recordingBucket');
+
+    const sinkArn = bucket!.startsWith('arn:')
+      ? bucket
+      : `arn:aws:s3:::${bucket}`;
+
+    const pipelineArn = `arn:aws:chime:${region}:${accountId}:media-pipeline/${pipelineId}`;
+
+    // 1️ Stop capture
     await this.pipelinesClient.send(
       new DeleteMediaCapturePipelineCommand({
         MediaPipelineId: pipelineId,
       }),
     );
+    // Wait until capture fully stops
+    await this.waitForCaptureToStop(pipelineId);
+    // 2️ Create concatenation
+    await this.pipelinesClient.send(
+      new CreateMediaConcatenationPipelineCommand({
+        Sources: [
+          {
+            Type: 'MediaCapturePipeline',
+            MediaCapturePipelineSourceConfiguration: {
+              MediaPipelineArn: pipelineArn,
+              ChimeSdkMeetingConfiguration: {
+                ArtifactsConfiguration: {
+                  Audio: { State: 'Enabled' },
+                  Video: { State: 'Enabled' },
+                  Content: { State: 'Disabled' },
+                  DataChannel: { State: 'Disabled' },
+                  TranscriptionMessages: { State: 'Disabled' },
+                  MeetingEvents: { State: 'Disabled' },
+                  CompositedVideo: { State: 'Disabled' },
+                },
+              },
+            },
+          },
+        ],
+        Sinks: [
+          {
+            Type: 'S3Bucket',
+            S3BucketSinkConfiguration: {
+              Destination: sinkArn,
+            },
+          },
+        ],
+      }),
+    );
+
+    this.logger.log({
+      message: 'Concatenation pipeline started',
+      pipelineId,
+    });
   }
 }

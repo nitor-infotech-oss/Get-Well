@@ -3,8 +3,6 @@
 # Runs on a single EC2 instance: Nginx + Backend + PostgreSQL + Redis
 # ============================================================
 
-version: '3.8'
-
 services:
   # ── PostgreSQL ──
   postgres:
@@ -49,7 +47,10 @@ services:
     container_name: gw-backend
     restart: always
     environment:
-      NODE_ENV: production
+      # POC demo: use 'development' so TypeORM synchronize creates tables
+      # and the seed user is created automatically.
+      # For real production: use 'production' with migrations.
+      NODE_ENV: development
       PORT: 3000
       LOG_LEVEL: info
       JWT_SECRET: ${JWT_SECRET:-rhythmx-prod-jwt-secret-change-me}
@@ -68,6 +69,7 @@ services:
       CHIME_MEETING_REGION: us-east-1
       CHIME_RECORDING_BUCKET: ${CHIME_RECORDING_BUCKET:-}
       CHIME_KMS_KEY_ARN: ${CHIME_KMS_KEY_ARN:-}
+      CHIME_ACCOUNT_ID: ${CHIME_ACCOUNT_ID:-}
       AWS_REGION: us-east-1
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
@@ -95,6 +97,7 @@ services:
     restart: always
     ports:
       - '80:80'
+      - '443:443'
     depends_on:
       - backend
     networks:

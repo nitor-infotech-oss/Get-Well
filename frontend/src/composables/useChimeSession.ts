@@ -13,11 +13,10 @@ import type {
  *    because the WebRTC session must be connected first.
  * 2. startVideoPreviewForVideoInput() is NOT used — it conflicts with
  *    startLocalVideoTile() because both try to claim the video track.
- *    Instead, the local video is bound via videoTileDidUpdate just like remote.
  * 3. Video element refs are stored as Vue Refs (not snapshots of .value)
  *    so we always read the latest DOM element, even if it mounts later.
- * 4. bindVideoElement() is called regardless of tileState.active — the binding
- *    sets up the connection; video will show once the tile becomes active.
+ * 4. After bindVideoElement(), we call element.play() explicitly to handle
+ *    browsers that don't honour the autoplay attribute for programmatic srcObject.
  */
 export function useChimeSession() {
   const session = ref<any>(null);
@@ -36,19 +35,55 @@ export function useChimeSession() {
   let pendingLocalTileId: number | null = null;
   let pendingRemoteTileId: number | null = null;
 
+  // Track bound tile IDs to avoid redundant binds for the same active state
+  let boundLocalTileId: number | null = null;
+  let boundRemoteTileId: number | null = null;
+
   /**
-   * Bind a video tile to a DOM element. Safely handles null elements.
+   * Bind a video tile to a DOM element, then force-play it.
+   * Returns true if the bind succeeded.
    */
-  function bindTile(tileId: number, element: HTMLVideoElement | null | undefined, label: string): boolean {
+  function bindTile(
+    tileId: number,
+    element: HTMLVideoElement | null | undefined,
+    label: string,
+  ): boolean {
     if (!session.value || !element) return false;
     try {
       session.value.audioVideo.bindVideoElement(tileId, element);
       console.log(`[Chime] Bound ${label} video tile ${tileId}`);
+
+      // Force-play: browsers may ignore autoplay when srcObject is set programmatically
+      forcePlay(element, label);
       return true;
     } catch (e: any) {
       console.warn(`[Chime] Failed to bind ${label} tile ${tileId}:`, e.message);
       return false;
     }
+  }
+
+  /**
+   * Explicitly play a video element. Handles both immediate and delayed srcObject.
+   */
+  function forcePlay(el: HTMLVideoElement, label: string): void {
+    const tryPlay = () => {
+      if (el.srcObject) {
+        el.play().then(() => {
+          console.log(`[Chime] ${label} video playing (${el.videoWidth}x${el.videoHeight})`);
+        }).catch((err) => {
+          // AbortError is benign (play() interrupted by a new play())
+          if (err.name !== 'AbortError') {
+            console.warn(`[Chime] ${label} play() error:`, err.name, err.message);
+          }
+        });
+      }
+    };
+
+    // Try immediately
+    tryPlay();
+    // Retry after a short delay (srcObject may be set asynchronously by the SDK)
+    setTimeout(tryPlay, 250);
+    setTimeout(tryPlay, 1000);
   }
 
   async function initializeSession(
@@ -72,6 +107,10 @@ export function useChimeSession() {
         deviceController,
       );
 
+      // Reset bound tile trackers
+      boundLocalTileId = null;
+      boundRemoteTileId = null;
+
       const observer: AudioVideoObserver = {
         audioVideoDidStart: () => {
           console.log('[Chime] audioVideoDidStart — WebRTC session connected');
@@ -85,6 +124,9 @@ export function useChimeSession() {
           } catch (e: any) {
             console.warn('[Chime] startLocalVideoTile failed:', e.message);
           }
+
+          // Safety net: after a delay, verify video elements are playing
+          setTimeout(() => verifyAndRetryBindings(), 2000);
         },
 
         audioVideoDidStop: (_sessionStatus: any) => {
@@ -102,12 +144,11 @@ export function useChimeSession() {
             active: tileState.active,
           });
 
-          // Bind regardless of active state — the binding connects the
-          // tile to the element; video flows once the tile becomes active
           if (tileState.localTile) {
             const el = localVideoRef?.value;
             if (el) {
               bindTile(tileState.tileId, el, 'local');
+              boundLocalTileId = tileState.tileId;
               pendingLocalTileId = null;
             } else {
               pendingLocalTileId = tileState.tileId;
@@ -116,6 +157,7 @@ export function useChimeSession() {
             const el = remoteVideoRef?.value;
             if (el) {
               bindTile(tileState.tileId, el, 'remote');
+              boundRemoteTileId = tileState.tileId;
               remoteVideoTileId.value = tileState.tileId;
               pendingRemoteTileId = null;
             } else {
@@ -130,6 +172,10 @@ export function useChimeSession() {
           if (tileId === remoteVideoTileId.value) {
             remoteVideoTileId.value = null;
             pendingRemoteTileId = null;
+            boundRemoteTileId = null;
+          }
+          if (tileId === boundLocalTileId) {
+            boundLocalTileId = null;
           }
         },
       };
@@ -137,8 +183,8 @@ export function useChimeSession() {
       session.value.audioVideo.addObserver(observer);
 
       console.log('[Chime] Session initialized', {
-        meetingId: meetingResponse.MeetingId,
-        attendeeId: attendeeResponse.AttendeeId,
+        meetingId: meetingResponse.Meeting?.MeetingId || meetingResponse.MeetingId,
+        attendeeId: attendeeResponse.Attendee?.AttendeeId || attendeeResponse.AttendeeId,
       });
     } catch (err: any) {
       error.value = `Failed to initialize Chime session: ${err.message}`;
@@ -148,10 +194,44 @@ export function useChimeSession() {
   }
 
   /**
+   * Safety net: verify video elements have srcObject, re-bind if necessary.
+   */
+  function verifyAndRetryBindings(): void {
+    if (!session.value) return;
+
+    const localEl = localVideoRef?.value;
+    const remoteEl = remoteVideoRef?.value;
+
+    console.log('[Chime] Verifying bindings:', {
+      localSrc: !!localEl?.srcObject,
+      localPaused: localEl?.paused,
+      localW: localEl?.videoWidth,
+      remoteSrc: !!remoteEl?.srcObject,
+      remotePaused: remoteEl?.paused,
+      remoteW: remoteEl?.videoWidth,
+      boundLocal: boundLocalTileId,
+      boundRemote: boundRemoteTileId,
+    });
+
+    // Re-bind local if needed
+    if (localEl && boundLocalTileId) {
+      if (!localEl.srcObject || localEl.paused) {
+        console.log('[Chime] Re-binding local tile', boundLocalTileId);
+        bindTile(boundLocalTileId, localEl, 'local-retry');
+      }
+    }
+
+    // Re-bind remote if needed
+    if (remoteEl && boundRemoteTileId) {
+      if (!remoteEl.srcObject || remoteEl.paused) {
+        console.log('[Chime] Re-binding remote tile', boundRemoteTileId);
+        bindTile(boundRemoteTileId, remoteEl, 'remote-retry');
+      }
+    }
+  }
+
+  /**
    * Select audio/video devices and connect to the meeting.
-   * Does NOT call startVideoPreviewForVideoInput — that conflicts
-   * with startLocalVideoTile. Local video is displayed via
-   * videoTileDidUpdate → bindVideoElement instead.
    */
   async function startAudioVideo(): Promise<void> {
     if (!session.value) {
@@ -176,6 +256,17 @@ export function useChimeSession() {
         console.log('[Chime] Video input:', videoInputs[0].label);
       }
 
+      // Bind an <audio> element so the SDK can play received audio from
+      // remote participants. Without this, the mic captures fine but nothing
+      // is routed to the speakers. The element is created programmatically —
+      // it does not need to be visible in the DOM.
+      const audioElement = document.createElement('audio');
+      audioElement.autoplay = true;
+      // Must NOT be muted — this is the speaker output for remote audio
+      audioElement.muted = false;
+      av.bindAudioElement(audioElement);
+      console.log('[Chime] Audio output element bound');
+
       // Connect to the Chime meeting.
       // audioVideoDidStart fires when connected → calls startLocalVideoTile()
       av.start();
@@ -194,6 +285,8 @@ export function useChimeSession() {
       session.value = null;
       pendingLocalTileId = null;
       pendingRemoteTileId = null;
+      boundLocalTileId = null;
+      boundRemoteTileId = null;
       console.log('[Chime] Session stopped');
     } catch (err: any) {
       console.error('[Chime] Stop error:', err);
@@ -235,6 +328,7 @@ export function useChimeSession() {
       if (el && pendingRemoteTileId && session.value) {
         console.log('[Chime] Remote element appeared — binding tile', pendingRemoteTileId);
         bindTile(pendingRemoteTileId, el, 'remote');
+        boundRemoteTileId = pendingRemoteTileId;
         pendingRemoteTileId = null;
       }
     });
@@ -243,6 +337,7 @@ export function useChimeSession() {
       if (el && pendingLocalTileId && session.value) {
         console.log('[Chime] Local element appeared — binding tile', pendingLocalTileId);
         bindTile(pendingLocalTileId, el, 'local');
+        boundLocalTileId = pendingLocalTileId;
         pendingLocalTileId = null;
       }
     });

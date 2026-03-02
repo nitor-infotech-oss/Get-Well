@@ -9,6 +9,7 @@ import { ChimeModule } from './modules/chime/chime.module';
 import { GetwellStayModule } from './modules/getwell-stay/getwell-stay.module';
 import { WebsocketModule } from './modules/websocket/websocket.module';
 import { CallOrchestrationModule } from './modules/call-orchestration/call-orchestration.module';
+import { RecordingsModule } from './modules/recordings/recordings.module';
 import { HealthModule } from './modules/health/health.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
@@ -18,6 +19,7 @@ import { RolesGuard } from './modules/auth/guards/roles.guard';
 import { User } from './modules/auth/entities/user.entity';
 import { CallRecord } from './modules/call-orchestration/entities/call-record.entity';
 import { AuditLog } from './modules/call-orchestration/entities/audit-log.entity';
+import { RecordingMetadata } from './modules/call-orchestration/entities/recording-metadata.entity';
 import { Device } from './modules/device/entities/device.entity';
 
 /**
@@ -57,7 +59,7 @@ import { Device } from './modules/device/entities/device.entity';
         ssl: config.get<boolean>('database.ssl')
           ? { rejectUnauthorized: false }
           : false,
-        entities: [User, CallRecord, AuditLog, Device],
+        entities: [User, CallRecord, AuditLog, RecordingMetadata, Device],
         synchronize: config.get<string>('app.environment') === 'development',
         // In production: use migrations, never synchronize
         logging: config.get<string>('app.environment') === 'development',
@@ -68,10 +70,12 @@ import { Device } from './modules/device/entities/device.entity';
     RedisModule,
 
     // Rate limiting
-    ThrottlerModule.forRoot([{
-      ttl: 60000,
-      limit: 100,
-    }]),
+    ThrottlerModule.forRoot([
+      {
+        ttl: 60000,
+        limit: 100,
+      },
+    ]),
 
     // Feature modules
     AuthModule,
@@ -79,6 +83,7 @@ import { Device } from './modules/device/entities/device.entity';
     GetwellStayModule,
     WebsocketModule,
     CallOrchestrationModule,
+    RecordingsModule,
     HealthModule,
   ],
   providers: [

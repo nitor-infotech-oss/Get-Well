@@ -32,24 +32,30 @@ export const useCallStore = defineStore('call', () => {
       return null;
     }
 
+    // Wrap in the canonical { Meeting: { ... } } / { Attendee: { ... } } format
+    // that MeetingSessionConfiguration expects from the CreateMeeting/CreateAttendee API.
     return {
       meeting: {
-        MeetingId: meetingId.value,
-        MediaPlacement: {
-          AudioHostUrl: mediaPlacement.value.audioHostUrl,
-          AudioFallbackUrl: mediaPlacement.value.audioFallbackUrl,
-          SignalingUrl: mediaPlacement.value.signalingUrl,
-          TurnControlUrl: mediaPlacement.value.turnControlUrl,
-          ScreenDataUrl: mediaPlacement.value.screenDataUrl,
-          ScreenSharingUrl: mediaPlacement.value.screenSharingUrl,
-          ScreenViewingUrl: mediaPlacement.value.screenViewingUrl,
-          EventIngestionUrl: mediaPlacement.value.eventIngestionUrl,
+        Meeting: {
+          MeetingId: meetingId.value,
+          MediaPlacement: {
+            AudioHostUrl: mediaPlacement.value.audioHostUrl,
+            AudioFallbackUrl: mediaPlacement.value.audioFallbackUrl,
+            SignalingUrl: mediaPlacement.value.signalingUrl,
+            TurnControlUrl: mediaPlacement.value.turnControlUrl,
+            ScreenDataUrl: mediaPlacement.value.screenDataUrl,
+            ScreenSharingUrl: mediaPlacement.value.screenSharingUrl,
+            ScreenViewingUrl: mediaPlacement.value.screenViewingUrl,
+            EventIngestionUrl: mediaPlacement.value.eventIngestionUrl,
+          },
         },
       },
       attendee: {
-        AttendeeId: attendeeId.value,
-        ExternalUserId: attendeeId.value, // Use attendeeId as externalUserId
-        JoinToken: joinToken.value,
+        Attendee: {
+          AttendeeId: attendeeId.value,
+          ExternalUserId: attendeeId.value,
+          JoinToken: joinToken.value,
+        },
       },
     };
   });

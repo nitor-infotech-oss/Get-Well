@@ -29,12 +29,15 @@
       <!-- Remote Video (Patient Camera) -->
       <v-col cols="12" md="9" class="pa-2">
         <div class="video-container">
-          <!-- Video element — ALWAYS in DOM so the ref is never null -->
+          <!-- Video element — ALWAYS in DOM so the ref is never null.
+               muted: Chime SDK handles audio via Web Audio API, not the <video> element.
+               Keeping it muted ensures browser autoplay policies don't block playback. -->
           <video
             ref="remoteVideoRef"
             class="video-tile"
             autoplay
             playsinline
+            muted
           ></video>
 
           <!-- Ringing overlay — absolutely positioned ON TOP of the video.

@@ -35,15 +35,18 @@ export default () => ({
     region: process.env.CHIME_REGION || 'us-east-1',
     /** For GovCloud: use us-gov-west-1 */
     meetingRegion: process.env.CHIME_MEETING_REGION || 'us-east-1',
-    /** S3 bucket for media capture pipeline recordings */
+    /** S3 bucket ARN for media capture pipeline (e.g. arn:aws:s3:::bucket-name) */
     recordingBucket: process.env.CHIME_RECORDING_BUCKET || '',
-    /** KMS Key ARN for S3 encryption at rest */
+    /** KMS Key ARN for S3 encryption at rest (HIPAA) */
     kmsKeyArn: process.env.CHIME_KMS_KEY_ARN || '',
+    /** AWS Account ID for Chime SourceArn; optional, falls back to STS GetCallerIdentity */
+    accountId: process.env.CHIME_ACCOUNT_ID || '',
   },
 
   // ── GetWell Stay API ──
   getwellStay: {
-    baseUrl: process.env.GETWELL_STAY_BASE_URL || 'https://api.getwellnetwork.com',
+    baseUrl:
+      process.env.GETWELL_STAY_BASE_URL || 'https://api.getwellnetwork.com',
     clientId: process.env.GETWELL_STAY_CLIENT_ID || '',
     clientSecret: process.env.GETWELL_STAY_CLIENT_SECRET || '',
     /** OAuth2 token endpoint */
